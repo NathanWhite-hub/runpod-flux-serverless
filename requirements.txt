@@ -1,0 +1,8 @@
+runpod>=1.7.0
+diffusers>=0.31.0
+transformers>=4.44.0
+accelerate>=0.34.0
+optimum-quanto>=0.2.4
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+Pillow>=10.0.0

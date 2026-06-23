@@ -1,0 +1,99 @@
+{
+  "title": "FLUX.1 Serverless (diffusers)",
+  "description": "Text to image with FLUX.1 on Runpod Serverless. A pure diffusers handler, no ComfyUI and no web UI. JSON in, base64 PNG out, scales to zero between requests. Optional 8 bit quantization runs FLUX.1-dev on a 24GB GPU.",
+  "type": "serverless",
+  "category": "image",
+  "config": {
+    "runsOn": "GPU",
+    "containerDiskInGb": 30,
+    "gpuCount": 1,
+    "gpuIds": "ADA_24,AMPERE_48",
+    "allowedCudaVersions": [
+      "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"
+    ],
+    "presets": [
+      {
+        "name": "FLUX.1 dev quantized (fits 24GB)",
+        "defaults": {
+          "MODEL_ID": "black-forest-labs/FLUX.1-dev",
+          "QUANTIZE": "true",
+          "DEFAULT_STEPS": 28,
+          "DEFAULT_GUIDANCE": 3.5
+        }
+      },
+      {
+        "name": "FLUX.1 dev full bf16 (48GB)",
+        "defaults": {
+          "MODEL_ID": "black-forest-labs/FLUX.1-dev",
+          "QUANTIZE": "false",
+          "DEFAULT_STEPS": 28,
+          "DEFAULT_GUIDANCE": 3.5
+        }
+      },
+      {
+        "name": "FLUX.1 schnell fast (ungated)",
+        "defaults": {
+          "MODEL_ID": "black-forest-labs/FLUX.1-schnell",
+          "QUANTIZE": "false",
+          "DEFAULT_STEPS": 4,
+          "DEFAULT_GUIDANCE": 0
+        }
+      }
+    ],
+    "env": [
+      {
+        "key": "MODEL_ID",
+        "input": {
+          "type": "huggingface",
+          "name": "Hugging Face model",
+          "description": "FLUX repo on Hugging Face. FLUX.1-dev is gated and needs a token with license access. FLUX.1-schnell is ungated.",
+          "default": "black-forest-labs/FLUX.1-dev",
+          "required": true
+        }
+      },
+      {
+        "key": "HUGGING_FACE_HUB_TOKEN",
+        "input": {
+          "name": "Hugging Face token",
+          "type": "string",
+          "description": "Read token from huggingface.co/settings/tokens. Required for gated models like FLUX.1-dev. Leave blank for schnell.",
+          "default": "",
+          "advanced": false
+        }
+      },
+      {
+        "key": "QUANTIZE",
+        "input": {
+          "type": "boolean",
+          "name": "8 bit quantization",
+          "description": "Quantize the transformer and T5 text encoder to qfloat8. Fits FLUX.1-dev on a 24GB GPU at a small quality cost.",
+          "default": false,
+          "trueValue": "true",
+          "falseValue": "false"
+        }
+      },
+      {
+        "key": "DEFAULT_STEPS",
+        "input": {
+          "name": "Default inference steps",
+          "type": "number",
+          "description": "Used when a request omits num_inference_steps. 28 to 50 for dev, 4 for schnell.",
+          "min": 1,
+          "max": 100,
+          "default": 28
+        }
+      },
+      {
+        "key": "DEFAULT_GUIDANCE",
+        "input": {
+          "name": "Default guidance scale",
+          "type": "number",
+          "description": "Used when a request omits guidance_scale. Around 3.5 for dev, 0 for schnell.",
+          "min": 0,
+          "max": 20,
+          "default": 3.5
+        }
+      }
+    ]
+  }
+}
