@@ -1,140 +1,131 @@
-# FLUX.1 Serverless (diffusers)
+# InvokeAI Serverless
 
-Text to image generation with FLUX.1 on Runpod Serverless. This is a plain `diffusers` worker. No ComfyUI, no InvokeAI, no web UI. You send JSON, you get a base64 PNG back, and the endpoint scales to zero so billing stops between requests.
+InvokeAI on Runpod Serverless. The worker boots `invokeai-web` headless inside the container and proxies its session queue over localhost. You send an InvokeAI graph as the job payload, the worker enqueues it, waits for the run, and returns the rendered image as base64. It idles to zero between requests, so you pay only while a job runs.
 
-[![Runpod](https://api.runpod.io/badge/NathanWhite-hub/runpod-flux-serverless)](https://console.runpod.io/hub/NathanWhite-hub/runpod-flux-serverless)
+[![Runpod](https://api.runpod.io/badge/NathanWhite-hub/runpod-invokeai-serverless)](https://console.runpod.io/hub/NathanWhite-hub/runpod-invokeai-serverless)
 
+## What this is and is not
 
-## Why diffusers and not InvokeAI
+This runs InvokeAI's generation engine, not its interface. There is no canvas, no gallery, no workflow editor. Those need a live server, which is a GPU Pod that bills the whole time it stays up. Serverless is request in, image out. If you want the canvas, run InvokeAI as a Pod instead.
 
-InvokeAI is a full application: a server, a job queue, a model database, and a canvas frontend. None of that maps onto a serverless request and response worker, which is why it is absent from the Hub. The generation core inside InvokeAI is `diffusers`, so this worker calls `diffusers` directly. The payload stays small and readable instead of a full node graph.
+The worker speaks InvokeAI's graph format, the same structure the app sends when you click Invoke. It is the InvokeAI counterpart to a ComfyUI serverless worker: the worker is thin, the graph carries the work.
 
-## Files
+## Models live on a network volume
 
-```
-.
-├── handler.py            # serverless handler: loads FLUX, runs generation, returns PNGs
-├── requirements.txt      # python deps (torch comes from the base image)
-├── Dockerfile            # CUDA + pytorch base, installs deps, runs the handler
-├── .gitignore
-└── .runpod/
-    ├── hub.json          # Hub listing + deploy config (GPU pools, env, presets)
-    └── tests.json        # Hub validator test (uses ungated schnell, no token needed)
-```
+The container ships InvokeAI with no models. Generation needs at least one model installed under `INVOKEAI_ROOT`, and a serverless container has no persistent disk of its own. So models belong on a Runpod network volume.
+
+One time setup:
+
+1. Create a network volume in the Runpod console.
+2. Attach it to a temporary GPU Pod running the same InvokeAI image, with `INVOKEAI_ROOT=/workspace/invokeai` pointed at the volume mount.
+3. Open the InvokeAI UI on that Pod and install your models through the Model Manager. They write to the volume and register in the model DB.
+4. Stop the Pod.
+5. Attach the same volume to this serverless endpoint. `INVOKEAI_ROOT` defaults to `/runpod-volume/invokeai`, which is where serverless mounts a network volume. Point both at the same data directory.
+
+After that, every cold worker reads the models straight from the volume.
+
+## Getting a graph
+
+A graph names its models by the key they were given at install time. The reliable way to get a correct graph:
+
+1. In the InvokeAI UI on your Pod, set up the generation you want.
+2. Open the browser developer tools, Network tab.
+3. Click Invoke. Find the request to `enqueue_batch`.
+4. Copy the JSON request body. The `batch` object inside it is what you send here.
+
+Because that graph was built against the same `INVOKEAI_ROOT` your endpoint uses, the model keys match.
 
 ## API
 
-### Request
+### Ping
+
+Send no graph to confirm the worker booted:
+
+```json
+{ "input": { "ping": true } }
+```
+
+Returns the running InvokeAI version.
+
+### Generate
+
+Send a graph:
 
 ```json
 {
   "input": {
-    "prompt": "a red fox in a snowy pine forest, golden hour",
-    "width": 1024,
-    "height": 1024,
-    "num_inference_steps": 28,
-    "guidance_scale": 3.5,
-    "num_images": 1,
-    "max_sequence_length": 512,
-    "seed": 12345
+    "graph": {
+      "nodes": { "...": "..." },
+      "edges": [ "..." ]
+    }
   }
 }
 ```
 
-`prompt` is the only required field. Everything else falls back to defaults. Omit `seed` for a random one, which is returned in the response so you can reproduce a result.
+Or send a full batch for iterations and seeds:
 
-| Field | Default | Notes |
-|-------|---------|-------|
-| `prompt` | required | text prompt |
-| `width` | 1024 | image width |
-| `height` | 1024 | image height |
-| `num_inference_steps` | `DEFAULT_STEPS` env | 28 to 50 for dev, 4 for schnell |
-| `guidance_scale` | `DEFAULT_GUIDANCE` env | around 3.5 for dev, 0 for schnell |
-| `num_images` | 1 | images per request |
-| `max_sequence_length` | 512 | T5 prompt token budget |
-| `seed` | random | integer for reproducible output |
+```json
+{
+  "input": {
+    "batch": {
+      "graph": { "nodes": {}, "edges": [] },
+      "runs": 1
+    }
+  }
+}
+```
 
 ### Response
 
 ```json
 {
-  "images": ["<base64 PNG>"],
-  "parameters": {
-    "model": "black-forest-labs/FLUX.1-dev",
-    "seed": 12345,
-    "num_inference_steps": 28,
-    "guidance_scale": 3.5,
-    "width": 1024,
-    "height": 1024,
-    "quantized": true
-  },
-  "seconds": 7.4
+  "status": "completed",
+  "item_ids": [1],
+  "image_names": ["a1b2c3.png"],
+  "images": ["<base64 PNG>"]
 }
 ```
 
-Decode an image with `base64 -d` or in code:
-
-```python
-import base64
-with open("out.png", "wb") as f:
-    f.write(base64.b64decode(resp["output"]["images"][0]))
-```
+A failed run returns `error`, `error_type`, and `error_message` from the queue item.
 
 ## Environment variables
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `MODEL_ID` | `black-forest-labs/FLUX.1-dev` | any FLUX repo on Hugging Face |
-| `HUGGING_FACE_HUB_TOKEN` | empty | required for gated models like FLUX.1-dev |
-| `QUANTIZE` | `false` | qfloat8 on transformer + T5, fits dev on 24GB |
-| `DEFAULT_STEPS` | `28` | step fallback when a request omits it |
-| `DEFAULT_GUIDANCE` | `3.5` | guidance fallback when a request omits it |
-
-## Model gating
-
-FLUX.1-dev is gated. Accept the license at https://huggingface.co/black-forest-labs/FLUX.1-dev, create a read token at https://huggingface.co/settings/tokens, and set it as `HUGGING_FACE_HUB_TOKEN` on the endpoint. FLUX.1-schnell is Apache 2.0 and needs no token, which is why the Hub validator test runs schnell.
-
-## VRAM
-
-| Mode | Approx VRAM | GPU |
-|------|-------------|-----|
-| dev, `QUANTIZE=true` | ~17 to 20 GB | 24GB card (4090, L4, A5000) |
-| dev, full bf16 + cpu offload | fits 24GB, faster on 48GB | A6000, L40S, A100 |
-| schnell, full bf16 | ~24 GB | 24GB card |
-
-The quantized path loads straight onto the GPU. The full path enables `enable_model_cpu_offload`, which trades speed for a smaller VRAM footprint.
-
-## Network volume
-
-The Dockerfile sets `HF_HOME=/runpod-volume/huggingface`. Attach a network volume to the endpoint so the FLUX weights download once and persist. Without a volume, every cold worker pulls the full model again, which adds minutes to the first request and burns disk.
+| `INVOKEAI_ROOT` | `/runpod-volume/invokeai` | data directory with the model DB and models |
+| `INVOKEAI_HOST` | `127.0.0.1` | host invokeai-web binds inside the container |
+| `INVOKEAI_PORT` | `9090` | port invokeai-web binds inside the container |
+| `INVOKEAI_QUEUE_ID` | `default` | queue id used for enqueue and polling |
+| `INVOKEAI_BOOT_TIMEOUT` | `600` | seconds a cold worker waits for the API |
+| `INVOKEAI_JOB_TIMEOUT` | `600` | seconds to wait for one generation |
+| `INVOKEAI_POLL_INTERVAL` | `1.0` | seconds between queue status checks |
 
 ## Deploy through the Hub
 
-1. Create an empty repo on GitHub and push this folder (commands below).
-2. Cut a GitHub Release. The Hub indexes releases, not commits.
-3. In the Runpod console open the Hub, click Get Started under Add your repo, paste the repo URL, and follow the prompts.
-4. After the build and validator pass and the listing is approved, click Deploy, pick a preset, and supply your Hugging Face token for dev.
+1. Push this repo and cut a GitHub Release. The Hub indexes releases, not commits.
+2. In the Runpod console open the Hub, Get Started under Add your repo, paste the URL.
+3. The validator sends a ping, so the build passes by booting InvokeAI on an empty `/tmp/invokeai`. It does not generate, since the validator has no volume.
+4. After approval, deploy, attach your prepared network volume, and set `INVOKEAI_ROOT` to the volume path.
+
+To skip the validator entirely, rename `.runpod/tests.json` to `.runpod/tests_.json` before the release.
 
 ## Deploy without the Hub
 
-Build the image, push it to a registry, then create a Serverless endpoint pointing at it.
-
 ```bash
-docker build -t YOUR_DOCKERHUB_USER/flux-serverless:1.0.0 .
-docker push YOUR_DOCKERHUB_USER/flux-serverless:1.0.0
+docker build -t YOUR_DOCKERHUB_USER/invokeai-serverless:1.0.0 .
+docker push YOUR_DOCKERHUB_USER/invokeai-serverless:1.0.0
 ```
 
-In the Runpod console create a Serverless endpoint, set the container image, attach a network volume, and set the env vars from the table above.
+Create a Serverless endpoint on that image, attach the network volume, set `INVOKEAI_ROOT`.
 
-## Local sanity check
+## Known rough edges
 
-The full pipeline needs a CUDA GPU and the model download, so local runs require a capable machine. Handler logic and imports check with:
+Cold starts are slow. The InvokeAI image is large and the app boots a DB and scans models before the first request. Keep an active worker warm if latency matters.
 
-```bash
-pip install runpod
-python -c "import handler"
-```
+The official image may install InvokeAI into a virtual environment. The Dockerfile installs runpod with `python -m pip`, which targets whatever `python` resolves to on the image PATH. If a build cannot import runpod, install into the same environment that owns `invokeai-web`.
+
+First boot against an empty `INVOKEAI_ROOT` creates the directory and DB with no models. Ping works. Generation returns a model error until models are installed on the volume.
 
 ## License
 
-Code here is MIT. The FLUX.1-dev weights carry the Black Forest Labs non commercial license. Review it before any commercial use.
+Worker code is MIT. InvokeAI is Apache 2.0. Models carry their own licenses.

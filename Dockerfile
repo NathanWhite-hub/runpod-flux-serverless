@@ -1,20 +1,17 @@
-FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
+FROM ghcr.io/invoke-ai/invokeai:latest
+
+# Clear the base image entrypoint so our handler runs instead of invokeai-web.
+ENTRYPOINT []
 
 ENV PYTHONUNBUFFERED=1
-ENV HF_HUB_ENABLE_HF_TRANSFER=1
-# Point the Hugging Face cache at the network volume so the FLUX weights
-# persist across cold workers instead of redownloading every time.
-ENV HF_HOME=/runpod-volume/huggingface
+ENV INVOKEAI_ROOT=/runpod-volume/invokeai
+ENV INVOKEAI_HOST=127.0.0.1
+ENV INVOKEAI_PORT=9090
 
-WORKDIR /app
+# Add the serverless deps into the same python env that runs invokeai-web.
+RUN python -m pip install --no-cache-dir runpod requests
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /workspace
+COPY handler.py /workspace/handler.py
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir hf_transfer -r requirements.txt
-
-COPY handler.py .
-
-CMD ["python", "-u", "handler.py"]
+CMD ["python", "-u", "/workspace/handler.py"]
