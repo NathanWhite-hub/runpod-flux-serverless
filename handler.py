@@ -15,6 +15,7 @@ import runpod
 
 INVOKEAI_HOST = os.environ.get("INVOKEAI_HOST", "127.0.0.1")
 INVOKEAI_PORT = int(os.environ.get("INVOKEAI_PORT", "9090"))
+INVOKEAI_ROOT = os.environ.get("INVOKEAI_ROOT", "/runpod-volume/invokeai")
 BASE = f"http://{INVOKEAI_HOST}:{INVOKEAI_PORT}"
 QUEUE_ID = os.environ.get("INVOKEAI_QUEUE_ID", "default")
 
@@ -35,17 +36,15 @@ def _server_up():
 def start_invokeai():
     """Boot invokeai-web once per worker and block until the API answers.
 
-    invokeai-web v6 takes no host or port flags. Binding comes from the
-    INVOKEAI_HOST and INVOKEAI_PORT env vars, defaulting to 127.0.0.1:9090.
+    InvokeAI v6 takes no --host or --port flags. Host and port come from config
+    or the INVOKEAI_ env vars, defaulting to 127.0.0.1:9090, which BASE targets.
+    The data directory is passed explicitly with --root.
     """
     global _server
     if _server_up():
         return
     if _server is None:
-        env = os.environ.copy()
-        env.setdefault("INVOKEAI_HOST", INVOKEAI_HOST)
-        env.setdefault("INVOKEAI_PORT", str(INVOKEAI_PORT))
-        _server = subprocess.Popen(["invokeai-web"], env=env)
+        _server = subprocess.Popen(["invokeai-web", "--root", INVOKEAI_ROOT])
     deadline = time.time() + BOOT_TIMEOUT
     while time.time() < deadline:
         if _server_up():
