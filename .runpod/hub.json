@@ -1,6 +1,6 @@
 {
   "title": "InvokeAI Serverless",
-  "description": "InvokeAI on Runpod Serverless. The worker boots invokeai-web headless and proxies its session queue. Send an InvokeAI graph as the job payload, get a base64 PNG back, scales to zero between requests. No canvas. Models live on a network volume mounted at INVOKEAI_ROOT.",
+  "description": "InvokeAI on Runpod Serverless. Boots invokeai-web headless and proxies its queue. Send a graph, get a base64 PNG. Scales to zero. Models load from a volume at INVOKEAI_ROOT.",
   "type": "serverless",
   "category": "image",
   "config": {
